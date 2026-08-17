@@ -1,0 +1,216 @@
+import numpy as np
+from scipy.optimize import brentq
+from CoolProp.CoolProp import PropsSI
+
+# ======================================================================
+# SECTION 1 — PROCESS (HOT) STREAM: Aspen-validated TR off-gas
+# ======================================================================
+m_NH3_in = 846.579          # kg/hr  (Aspen: 20.3179 t/day)
+m_H2O_in = 39389.75         # kg/hr  (Aspen: 945.354 t/day)
+m_tot_in = m_NH3_in + m_H2O_in
+
+MW_NH3, MW_H2O = 17.03, 18.02          # g/mol
+n_NH3 = m_NH3_in / MW_NH3               # kmol/hr — ALL stays vapor (design basis)
+n_H2O_in = m_H2O_in / MW_H2O            # kmol/hr entering
+
+T_in_C = 140.0        # degC — Aspen-given TR off-gas temperature
+P_bar = 1.00          # bar(a) — Aspen-given TR off-gas pressure
+T_out_C = 40.0         # degC — DESIGN TARGET outlet (chosen for this design;
+                        #        achievable with 25/40 degC cooling water — see Section 5)
+
+y_H2O_in = n_H2O_in / (n_H2O_in + n_NH3)     # mol fraction water in the inlet gas
+
+
+# ======================================================================
+# SECTION 2 — DEW POINT of the incoming mixture
+# ======================================================================
+def Psat_water_bar(T_C):
+    """Water saturation pressure (bar) at temperature T_C, via CoolProp/IAPWS-IF97."""
+    return PropsSI("P", "T", T_C + 273.15, "Q", 1, "Water") / 1e5
+
+
+T_dew = brentq(lambda T: Psat_water_bar(T) - y_H2O_in * P_bar, 50, 139.9)
+
+
+# ======================================================================
+# SECTION 3 — CONDENSATION CURVE (T_in -> T_out), water condensing,
+#              NH3 assumed non-condensing
+# ======================================================================
+N_STEPS = 400
+T_grid = np.linspace(T_in_C, T_out_C, N_STEPS)
+
+
+def water_vapor_remaining_kmolhr(T_C):
+    """kmol/hr of water still in vapor phase at temperature T_C (rest is liquid)."""
+    if T_C >= T_dew:
+        return n_H2O_in
+    y = min(Psat_water_bar(T_C) / P_bar, y_H2O_in)
+    return n_NH3 * y / (1 - y)
+
+
+n_H2O_vap = np.array([water_vapor_remaining_kmolhr(T) for T in T_grid])
+m_H2O_vap = n_H2O_vap * MW_H2O
+m_H2O_liq = m_H2O_in - m_H2O_vap                 # cumulative condensate, kg/hr
+
+m_H2O_vap_out = m_H2O_vap[-1]
+m_H2O_cond_tot = m_H2O_liq[-1]
+
+
+# ======================================================================
+# SECTION 4 — ENTHALPY PROFILE & ENERGY BALANCE (rigorous, CoolProp)
+# ======================================================================
+def H_hot_stream_W(T_C, n_H2Ovap_local_kmolhr):
+    """Total enthalpy flow (W) of the hot stream at temperature T_C."""
+    T_K = T_C + 273.15
+    h_NH3 = PropsSI("H", "T", T_K, "P", 1e5, "Ammonia")           # J/kg
+    if T_C >= T_dew:
+        m_v, m_l = m_H2O_in, 0.0
+        h_v = PropsSI("H", "T", T_K, "P", 1e5, "Water")           # superheated
+        h_l = 0.0
+    else:
+        m_v = n_H2Ovap_local_kmolhr * MW_H2O
+        m_l = m_H2O_in - m_v
+        h_v = PropsSI("H", "T", T_K, "Q", 1, "Water")             # saturated vapor
+        h_l = PropsSI("H", "T", T_K, "Q", 0, "Water")             # saturated liquid
+    return (m_NH3_in * h_NH3 + m_v * h_v + m_l * h_l) / 3600.0    # kg/hr * J/kg / 3600 = W
+
+
+H_profile = np.array([H_hot_stream_W(T_grid[i], n_H2O_vap[i]) for i in range(N_STEPS)])
+Q_released_W = H_profile[0] - H_profile         # cumulative W released, hot stream cooling
+Q_total_W = float(Q_released_W[-1])
+Q_total_kW = Q_total_W / 1000.0
+
+
+# ======================================================================
+# SECTION 5 — COLD STREAM: cooling water, counter-current
+# ======================================================================
+T_cw_in_C = 25.0        # degC — assumed cooling-water/cooling-tower supply
+T_cw_out_C = 40.0        # degC — assumed 15 degC rise (moderate, reduces water flow)
+Cp_cw = 4180.0            # J/kg.K, liquid water ~30 degC average
+
+m_cw = Q_total_W / (Cp_cw * (T_cw_out_C - T_cw_in_C))     # kg/s
+m_cw_hr = m_cw * 3600.0
+
+# local cold-side temperature at the point matching each hot-side grid point
+# (counter-current: cold stream enters at the HOT-OUTLET end)
+T_cold_profile = T_cw_in_C + (Q_total_W - Q_released_W) / (m_cw * Cp_cw)
+dT_local = T_grid - T_cold_profile                          # local approach temperature, degC
+
+
+# ======================================================================
+# SECTION 6 — HEAT-TRANSFER AREA (incremental integration)
+# ======================================================================
+U = 450.0   # W/m2.K — ASSUMED. Representative of partial condensation of steam in the
+            # presence of a non-condensable/accumulating inert gas (NH3): well below a
+            # clean steam condenser's 2,000-8,000 W/m2.K because the rising NH3 fraction
+            # blankets the tube wall, adding vapor-phase diffusional resistance
+            # (Colburn-Hougen-type effect). Update this if you have vendor/test data.
+
+dQ = np.diff(Q_released_W)
+dT_avg = 0.5 * (dT_local[:-1] + dT_local[1:])
+dA = dQ / (U * dT_avg)
+A_total = float(np.sum(dA))                                  # m2
+
+# Simple overall LMTD, shown for comparison only — LESS accurate here because the
+# hot-side temperature glides rather than following the linear profile LMTD assumes.
+dT1, dT2 = T_in_C - T_cw_out_C, T_out_C - T_cw_in_C
+LMTD = (dT1 - dT2) / np.log(dT1 / dT2)
+A_lmtd = Q_total_W / (U * LMTD)
+
+
+# ======================================================================
+# SECTION 7 — MONOTUBULAR GEOMETRY (single inner tube / annulus)
+# ======================================================================
+T_in_K = T_in_C + 273.15
+rho_gas_in = (PropsSI("D", "T", T_in_K, "P", P_bar * 1e5, "Water") * y_H2O_in +
+              PropsSI("D", "T", T_in_K, "P", P_bar * 1e5, "Ammonia") * (1 - y_H2O_in))
+Qvol_in = (m_tot_in / 3600.0) / rho_gas_in                    # m3/s, inlet gas
+
+# NOTE: at the ACTUAL mass flow (40.2 t/hr) but LOW density (~0.53 kg/m3, mostly
+# steam at 140 degC/1 bar), volumetric flow is large (~21 m3/s). A small tube would
+# force supersonic velocity and an impossibly long tube. The diameter below is sized
+# for a realistic ~19 m/s inlet gas velocity.
+D_tube_in = 1.20     # m, inner tube ID
+D_tube_out = 1.22     # m, inner tube OD (10 mm wall)
+D_annulus = 1.35      # m, outer casing ID
+
+A_tube_cs = np.pi / 4 * D_tube_in ** 2
+v_gas_in = Qvol_in / A_tube_cs
+
+A_annulus_cs = np.pi / 4 * (D_annulus ** 2 - D_tube_out ** 2)
+rho_cw = 995.0
+v_cw = m_cw / (rho_cw * A_annulus_cs)
+
+A_per_length = np.pi * D_tube_out              # m2 of HX area per metre of tube (OD basis)
+L_required = A_total / A_per_length             # m
+
+
+# ======================================================================
+# SECTION 8 — PRESSURE DROP (Darcy-Weisbach, Blasius friction factor)
+# ======================================================================
+mu_gas_in = (PropsSI("V", "T", T_in_K, "P", P_bar * 1e5, "Water") * y_H2O_in +
+             PropsSI("V", "T", T_in_K, "P", P_bar * 1e5, "Ammonia") * (1 - y_H2O_in))
+Re_gas = rho_gas_in * v_gas_in * D_tube_in / mu_gas_in
+f_gas = 0.079 * Re_gas ** -0.25 if Re_gas > 4000 else 64 / Re_gas
+dP_gas_Pa = f_gas * (L_required / D_tube_in) * 0.5 * rho_gas_in * v_gas_in ** 2
+
+mu_cw = PropsSI("V", "T", 305.0, "P", 2e5, "Water")
+D_h_annulus = D_annulus - D_tube_out
+Re_cw = rho_cw * v_cw * D_h_annulus / mu_cw
+f_cw = 0.079 * Re_cw ** -0.25
+dP_cw_Pa = f_cw * (L_required / D_h_annulus) * 0.5 * rho_cw * v_cw ** 2
+
+
+# ======================================================================
+# SECTION 9 — REPORT
+# ======================================================================
+def report():
+    print("=" * 74)
+    print("HOT STREAM — TR off-gas (Aspen-validated)")
+    print("=" * 74)
+    print(f"  Inlet : {m_tot_in:>10.1f} kg/hr  (NH3 {m_NH3_in:.1f} + H2O {m_H2O_in:.1f})")
+    print(f"          {T_in_C:.0f} degC, {P_bar:.2f} bar(a)")
+    print(f"  Dew point of incoming gas: {T_dew:.2f} degC")
+    print(f"  Outlet target: {T_out_C:.0f} degC")
+    print(f"    H2O condensed   : {m_H2O_cond_tot:>10.1f} kg/hr  "
+          f"({m_H2O_cond_tot / m_H2O_in * 100:.2f}% of inlet water)")
+    print(f"    H2O vapor left  : {m_H2O_vap_out:>10.2f} kg/hr")
+    print(f"    NH3 (unchanged) : {m_NH3_in:>10.1f} kg/hr")
+    print(f"    Outlet vapor NH3 purity: "
+          f"{m_NH3_in / (m_NH3_in + m_H2O_vap_out) * 100:.1f}% by mass")
+    print()
+    print("=" * 74)
+    print("ENERGY BALANCE")
+    print("=" * 74)
+    print(f"  Total duty Q = {Q_total_kW:,.0f} kW  ({Q_total_kW * 3600 / 1e3:,.0f} MJ/hr)")
+    print()
+    print("=" * 74)
+    print("COLD STREAM — cooling water")
+    print("=" * 74)
+    print(f"  {T_cw_in_C:.0f} -> {T_cw_out_C:.0f} degC, "
+          f"flow = {m_cw:.2f} kg/s = {m_cw_hr / 1000:,.1f} t/hr")
+    print()
+    print("=" * 74)
+    print("HEAT-EXCHANGER SIZING")
+    print("=" * 74)
+    print(f"  U (assumed)                 = {U:.0f} W/m2.K")
+    print(f"  Area, incremental integ.    = {A_total:,.1f} m2")
+    print(f"  Area, simple overall LMTD   = {A_lmtd:,.1f} m2  "
+          f"(LMTD={LMTD:.1f} degC; comparison only, less accurate here)")
+    print(f"  Tube ID / OD                = {D_tube_in * 1000:.0f} / {D_tube_out * 1000:.0f} mm")
+    print(f"  Annulus (outer casing) ID   = {D_annulus * 1000:.0f} mm")
+    print(f"  Required tube length        = {L_required:,.1f} m")
+    print(f"  Gas velocity (inlet)        = {v_gas_in:.2f} m/s   (Re = {Re_gas:,.0f})")
+    print(f"  Cooling-water velocity      = {v_cw:.2f} m/s   (Re = {Re_cw:,.0f})")
+    print(f"  Gas-side pressure drop      = {dP_gas_Pa / 1000:.3f} kPa")
+    print(f"  Water-side pressure drop    = {dP_cw_Pa / 1000:.2f} kPa")
+    print()
+    print("NOTE: a single 274 m tube is impractical to fabricate/install as one piece.")
+    print("Real practice would split this area across N parallel tubes (shell-and-tube),")
+    print("each L/N long, or route this single tube in a serpentine/coiled arrangement.")
+    print("This design honours your 'monotubular' (single flow-path) requirement; see")
+    print("the accompanying notes for the practical multi-tube alternative.")
+
+
+if __name__ == "__main__":
+    report()
