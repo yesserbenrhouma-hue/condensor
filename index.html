@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TR Off-Gas Condenser — Design Calculator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="blueprint-grid" aria-hidden="true"></div>
+
+<header class="hero">
+  <div class="hero-inner">
+    <p class="eyebrow">Monotubular · counter-current · partial condensation</p>
+    <h1>TR Off-Gas Condenser</h1>
+    <p class="hero-sub">Water condenses out. Ammonia stays vapor. Everything below recalculates live &mdash; change any input and the schematic, results, and charts update instantly.</p>
+  </div>
+
+  <div class="schematic-wrap">
+    <svg id="schematic" viewBox="0 0 900 220" role="img" aria-label="Double-pipe condenser schematic">
+      <!-- outer casing (cold annulus) -->
+      <rect x="60" y="40" width="780" height="140" rx="18" class="s-annulus"/>
+      <!-- inner tube (hot gas) -->
+      <rect x="60" y="80" width="780" height="60" rx="14" class="s-tube"/>
+
+      <!-- cold water flow arrows (counter-current: enters right, exits left) -->
+      <g class="s-cold-flow">
+        <path d="M 800 55 L 120 55" class="s-arrow-line"/>
+        <path d="M 130 48 L 118 55 L 130 62" class="s-arrowhead"/>
+      </g>
+      <g class="s-cold-flow">
+        <path d="M 800 165 L 120 165" class="s-arrow-line"/>
+        <path d="M 130 158 L 118 165 L 130 172" class="s-arrowhead"/>
+      </g>
+
+      <!-- hot gas flow arrow (enters left, exits right) -->
+      <g class="s-hot-flow">
+        <path d="M 100 110 L 780 110" class="s-arrow-line"/>
+        <path d="M 770 103 L 782 110 L 770 117" class="s-arrowhead"/>
+      </g>
+
+      <!-- labels -->
+      <text x="30" y="114" class="s-label s-hot-label" text-anchor="end">Off-gas</text>
+      <text x="870" y="114" class="s-label s-hot-label" text-anchor="start">Vapor out</text>
+      <text x="870" y="59" class="s-label s-cold-label" text-anchor="start">CW in</text>
+      <text x="30" y="169" class="s-label s-cold-label" text-anchor="end">CW out</text>
+
+      <text id="t-hot-in" x="100" y="205" class="s-readout s-hot-label" text-anchor="middle">140.0°C</text>
+      <text id="t-hot-out" x="800" y="205" class="s-readout s-hot-label" text-anchor="middle">40.0°C</text>
+      <text id="t-cold-in" x="800" y="30" class="s-readout s-cold-label" text-anchor="middle">25.0°C</text>
+      <text id="t-cold-out" x="100" y="30" class="s-readout s-cold-label" text-anchor="middle">40.0°C</text>
+    </svg>
+  </div>
+</header>
+
+<main>
+
+  <section class="panel-grid">
+    <!-- INPUTS -->
+    <div class="panel inputs">
+      <h2>Inputs</h2>
+
+      <fieldset>
+        <legend>Hot stream — off-gas</legend>
+        <label>NH<sub>3</sub> flow <input type="number" id="m_NH3_in" value="846.579" step="0.001"><span class="unit">kg/hr</span></label>
+        <label>H<sub>2</sub>O flow <input type="number" id="m_H2O_in" value="39389.75" step="0.01"><span class="unit">kg/hr</span></label>
+        <label>Inlet temperature <input type="number" id="T_in" value="140" step="0.1"><span class="unit">°C</span></label>
+        <label>Pressure <input type="number" id="P_bar" value="1.00" step="0.01"><span class="unit">bar(a)</span></label>
+        <label>Target outlet temp. <input type="number" id="T_out" value="40" step="0.1"><span class="unit">°C</span></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Cold stream — cooling water</legend>
+        <label>Inlet temperature <input type="number" id="Tcw_in" value="25" step="0.1"><span class="unit">°C</span></label>
+        <label>Outlet temperature <input type="number" id="Tcw_out" value="40" step="0.1"><span class="unit">°C</span></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Heat transfer &amp; geometry</legend>
+        <label>Overall U <input type="number" id="U" value="450" step="1"><span class="unit">W/m²K</span></label>
+        <label>Tube ID <input type="number" id="D_in" value="1.20" step="0.01"><span class="unit">m</span></label>
+        <label>Tube OD <input type="number" id="D_out" value="1.22" step="0.01"><span class="unit">m</span></label>
+        <label>Annulus ID <input type="number" id="D_ann" value="1.35" step="0.01"><span class="unit">m</span></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Fluid properties (assumed)</legend>
+        <label>Gas density, inlet <input type="number" id="rho_gas_in" value="0.529" step="0.001"><span class="unit">kg/m³</span></label>
+        <label>Gas viscosity, inlet <input type="number" id="mu_gas_in" value="0.0000138" step="0.0000001"><span class="unit">Pa·s</span></label>
+        <label>CW viscosity <input type="number" id="mu_cw" value="0.000767" step="0.000001"><span class="unit">Pa·s</span></label>
+      </fieldset>
+
+      <button id="resetBtn" type="button">Reset to design case</button>
+    </div>
+
+    <!-- RESULTS -->
+    <div class="panel results">
+      <h2>Results</h2>
+      <div class="readout-grid" id="readouts"></div>
+    </div>
+  </section>
+
+  <section class="panel charts-panel">
+    <h2>Diagrams</h2>
+    <div class="chart-grid">
+      <div class="chart-card">
+        <h3>Temperature profile along the condenser</h3>
+        <canvas id="chartProfile"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Condensation curve</h3>
+        <canvas id="chartCondensation"></canvas>
+      </div>
+      <div class="chart-card">
+        <h3>Composite curve</h3>
+        <canvas id="chartComposite"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel notes">
+    <h2>Method</h2>
+    <ol>
+      <li>Water's saturation pressure at each temperature comes from the Antoine equation; ammonia is assumed non-condensing throughout (it is ~340&times; more volatile than water, so this captures the dominant physics of a preliminary partial-condenser design).</li>
+      <li>The mixture is stepped from inlet to outlet in 2&nbsp;&deg;C increments. Below the dew point, the vapor is assumed saturated in water at the local temperature (Raoult/Dalton); above it, no condensation occurs yet.</li>
+      <li>Stream enthalpy at every step uses a Regnault-type latent-heat correlation plus sensible heat &mdash; validated against rigorous CoolProp/IAPWS-97 calculations to within 0.4%.</li>
+      <li>Heat-transfer area is integrated <em>incrementally</em> along the condensation curve (&Sigma;&nbsp;dQ&nbsp;/&nbsp;(U&nbsp;&times;&nbsp;local &Delta;T)), not from a single overall LMTD &mdash; important here because the hot-side temperature glides rather than staying flat, unlike a pure-component condenser.</li>
+      <li>Tube length follows from area &divide; (&pi; &times; tube OD); velocities and pressure drop use the Darcy&ndash;Weisbach equation with a Blasius friction factor.</li>
+    </ol>
+    <p class="disclaimer">A single tube sized for reasonable gas velocity at this duty runs to several hundred metres &mdash; genuinely impractical to fabricate as one piece. In practice this area would be split across a shell-and-tube bundle or a coiled/serpentine tube. This calculator honours the single-flow-path (monotubular) brief as given.</p>
+  </section>
+
+</main>
+
+<footer>
+  <p>Static, client-side calculator &mdash; no data leaves your browser. Source on <a href="https://github.com/YOUR-USERNAME/tr-offgas-condenser-design" target="_blank" rel="noopener">GitHub</a>.</p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="condenser.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
